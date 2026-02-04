@@ -425,10 +425,16 @@ export class MemvidClient {
                     this.logger?.info?.(`memvid view raw output: ${output}`);
                }
 
+               // Prefer parsed.content or parsed.text, but fall back to frame.search_text or frame.content
+               let content = parsed?.content || parsed?.text || '';
+               if (!content && parsed?.frame && typeof parsed.frame === 'object') {
+                    content = parsed.frame.search_text || parsed.frame.content || parsed.frame.preview || '';
+               }
+
                return {
-                    frameId: parsed?.frame_id || parsed?.id || idOrUri,
-                    content: parsed?.content || parsed?.text || '',
-                    timestamp: parsed?.timestamp || Date.now(),
+                    frameId: parsed?.frame_id || parsed?.id || parsed?.frame?.id || idOrUri,
+                    content: content || '',
+                    timestamp: parsed?.timestamp || parsed?.frame?.timestamp || Date.now(),
                     metadata: parsed || {},
                };
           } catch (err) {
