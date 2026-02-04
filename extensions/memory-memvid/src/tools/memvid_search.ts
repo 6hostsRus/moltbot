@@ -48,9 +48,7 @@ export const memvidSearch = (
                          );
                          const results = await memvidClient.search(
                               query,
-                              memvidClient.validateArchiveDir(
-                                   archiveName || ''
-                              ),
+                              archiveName ? memvidClient.validateArchiveDir(archiveName) : undefined,
                               limit
                          );
 
