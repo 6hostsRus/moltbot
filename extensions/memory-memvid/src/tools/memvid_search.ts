@@ -88,6 +88,7 @@ export const memvidSearch = (
                                         frameId: r.frameId,
                                         frameIndex: (r.metadata as any)?.frameIndex,
                                         uri: (r.metadata as any)?.uri,
+                                        preferredId: (r.metadata as any)?.frameIndex !== undefined ? String((r.metadata as any).frameIndex) : r.frameId || (r.metadata as any)?.uri,
                                    })),
                               },
                          };

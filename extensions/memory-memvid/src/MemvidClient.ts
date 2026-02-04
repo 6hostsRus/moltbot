@@ -402,18 +402,34 @@ export class MemvidClient {
      /**
       * View specific entry
       */
-     async view(archivePath: string, frameId: string): Promise<Entry> {
-          const args = ['view', archivePath, '--frame-id', frameId, '--json'];
+     async view(archivePath: string, idOrUri: string): Promise<Entry> {
+          // If idOrUri looks like a URI, call with --uri; otherwise use --frame-id
+          const isUri = String(idOrUri).startsWith('mv2://') || String(idOrUri).includes('/');
+
+          const args = isUri
+               ? ['view', archivePath, '--uri', String(idOrUri), '--json']
+               : ['view', archivePath, '--frame-id', String(idOrUri), '--json'];
 
           try {
                const output = await this.exec(args);
-               const parsed = JSON.parse(output);
+               let parsed: any;
+               try {
+                    parsed = JSON.parse(output);
+               } catch (parseErr) {
+                    this.logger?.warn?.(`memvid view: failed to parse JSON output: ${parseErr}`);
+                    parsed = null;
+               }
+
+               // If parsed is null or missing content, log raw output for diagnostics
+               if (!parsed || (!parsed.content && !parsed.text)) {
+                    this.logger?.info?.(`memvid view raw output: ${output}`);
+               }
 
                return {
-                    frameId: parsed.frame_id || parsed.id || frameId,
-                    content: parsed.content || parsed.text || '',
-                    timestamp: parsed.timestamp || Date.now(),
-                    metadata: parsed.metadata,
+                    frameId: parsed?.frame_id || parsed?.id || idOrUri,
+                    content: parsed?.content || parsed?.text || '',
+                    timestamp: parsed?.timestamp || Date.now(),
+                    metadata: parsed || {},
                };
           } catch (err) {
                throw new Error(`View failed: ${err}`);
