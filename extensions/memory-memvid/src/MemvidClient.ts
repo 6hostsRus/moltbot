@@ -315,6 +315,17 @@ export class MemvidClient {
                                    metadata: item.metadata,
                               });
                          }
+                    } else if (parsed && Array.isArray(parsed.hits)) {
+                         // mv2.result.v2 format (object with hits array)
+                         for (const hit of parsed.hits) {
+                              results.push({
+                                   archiveName,
+                                   content: hit.text || hit.content || '',
+                                   score: hit.score || hit.rank || 0,
+                                   frameId: hit.frame_id || hit.frameId || hit.frame_id || hit.id || hit.uri || '',
+                                   metadata: hit.metadata || {},
+                              });
+                         }
                     }
                } catch (err) {
                     this.logger?.warn?.(`Search failed for ${archive}: ${err}`);
