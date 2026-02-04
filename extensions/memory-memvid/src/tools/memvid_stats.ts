@@ -25,19 +25,6 @@ export const memvidStats = (
                     const { archiveName } = params as {
                          archiveName?: string;
                     };
-                    if (!archiveName) {
-                         return {
-                              content: [
-                                   {
-                                        type: 'text' as const,
-                                        text: 'Archive name is required',
-                                   },
-                              ],
-                              details: {
-                                   error: 'Missing archiveName parameter',
-                              },
-                         };
-                    }
                     try {
                          if (archiveName) {
                               const stats = await memvidClient.stats(

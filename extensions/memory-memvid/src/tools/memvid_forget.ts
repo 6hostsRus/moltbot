@@ -52,7 +52,7 @@ export const memvidForget = (
                          } else if (query) {
                               const results = await memvidClient.search(
                                    query,
-                                   memvidClient.validateArchiveDir(archiveName),
+                                   archiveName ? memvidClient.validateArchiveDir(archiveName) : undefined,
                                    5
                               );
 

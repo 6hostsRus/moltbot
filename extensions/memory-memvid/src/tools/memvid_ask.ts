@@ -25,9 +25,11 @@ export const memvidAsk = (api: OpenClawPluginApi, memvidClient: MemvidClient) =>
                ) {
                     const { question, archiveName } = params;
                     try {
+                         const targetArchive = archiveName ? memvidClient.validateArchiveDir(archiveName) : undefined;
+
                          const answer = await memvidClient.ask(
                               question,
-                              memvidClient.validateArchiveDir(archiveName)
+                              targetArchive
                          );
 
                          return {
