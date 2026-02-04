@@ -1,7 +1,6 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { join, basename } from 'node:path';
-import { promisify } from 'node:util';
-import { exec } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readdir, stat } from 'node:fs/promises';
 import {
      ArchiveInfo,
@@ -15,10 +14,12 @@ import {
      TimelineOptions,
 } from './types/types';
 
-const execAsync = promisify(exec);
-
 /**
  * Memvid CLI wrapper client
+ *
+ * This version streams subprocess stdout/stderr live to the injected logger
+ * and optionally to the process stdout/stderr when running locally. Streaming
+ * can be disabled by setting MEMVID_STREAM_OUTPUT=0 in the environment.
  */
 export class MemvidClient {
      constructor(
@@ -45,7 +46,7 @@ export class MemvidClient {
      }
 
      /**
-      * Execute memvid CLI command
+      * Execute memvid CLI command and stream output.
       */
      private async exec(args: string[], archivePath?: string): Promise<string> {
           const cmd = [this.memvidPath, ...args];
@@ -53,32 +54,64 @@ export class MemvidClient {
                cmd.push(archivePath);
           }
 
-          const env = { ...process.env };
+          const env = { ...process.env } as Record<string, string | undefined>;
           if (this.apiKey) {
                env.MEMVID_API_KEY = this.apiKey;
           }
 
-          try {
-               const { stdout, stderr } = await execAsync(cmd.join(' '), {
-                    env,
-               });
-               if (stderr && !stderr.includes('Warning')) {
-                    this.logger?.warn?.(`memvid stderr: ${stderr}`);
+          const streamEnabled = env.MEMVID_STREAM_OUTPUT !== '0';
+
+          return new Promise<string>((resolve, reject) => {
+               try {
+                    const child = spawn(cmd[0], cmd.slice(1), { env });
+
+                    let stdoutBuf = '';
+                    let stderrBuf = '';
+
+                    child.stdout?.on('data', (chunk: Buffer) => {
+                         const text = chunk.toString();
+                         stdoutBuf += text;
+                         // Log live
+                         this.logger?.info?.(`memvid: ${text.trim()}`);
+                         if (streamEnabled) process.stdout.write(text);
+                    });
+
+                    child.stderr?.on('data', (chunk: Buffer) => {
+                         const text = chunk.toString();
+                         stderrBuf += text;
+                         // Warn live
+                         this.logger?.warn?.(`memvid [stderr]: ${text.trim()}`);
+                         if (streamEnabled) process.stderr.write(text);
+                    });
+
+                    child.on('error', (err) => {
+                         this.logger?.error?.(
+                              `memvid command spawn failed: ${cmd.join(' ')} - ${String(err)}`
+                         );
+                         reject(err);
+                    });
+
+                    child.on('close', (code) => {
+                         if (stderrBuf && !stderrBuf.includes('Warning')) {
+                              // already logged incrementally; keep a concise warning
+                              this.logger?.warn?.(`memvid finished with stderr output`);
+                         }
+
+                         if (code !== 0) {
+                              const message = `memvid exited ${code}: ${stderrBuf || stdoutBuf}`;
+                              this.logger?.error?.(message);
+                              return reject(new Error(message));
+                         }
+
+                         resolve(stdoutBuf.trim());
+                    });
+               } catch (err) {
+                    this.logger?.error?.(
+                         `memvid command failed (exception): ${cmd.join(' ')} - ${String(err)}`
+                    );
+                    reject(err);
                }
-               return stdout.trim();
-          } catch (err) {
-               const error = err as {
-                    code?: number;
-                    stderr?: string;
-                    message?: string;
-               };
-               this.logger?.error?.(
-                    `memvid command failed: ${cmd.join(' ')}\n${error.stderr || error.message}`
-               );
-               throw new Error(
-                    `Memvid CLI error: ${error.stderr || error.message || 'unknown error'}`
-               );
-          }
+          });
      }
 
      /**
@@ -172,29 +205,73 @@ export class MemvidClient {
           content: string,
           metadata?: Record<string, unknown>
      ): Promise<string> {
-          // Use memvid put with stdin
+          // Use memvid put with stdin via spawn so we can stream
           const metaJson = metadata ? JSON.stringify(metadata) : '{}';
-          const cmd = `echo ${JSON.stringify(content)} | ${this.memvidPath} put ${archivePath} --metadata '${metaJson}'`;
+          const args = ['put', archivePath, '--metadata', metaJson];
 
-          const env = { ...process.env };
+          const env = { ...process.env } as Record<string, string | undefined>;
           if (this.apiKey) {
                env.MEMVID_API_KEY = this.apiKey;
           }
 
-          try {
-               const { stdout } = await execAsync(cmd, { env });
-               const frameId = stdout.trim();
+          const streamEnabled = env.MEMVID_STREAM_OUTPUT !== '0';
 
-               // Check capacity after put
-               await this.checkAndExpandCapacity(archivePath);
+          return new Promise<string>((resolve, reject) => {
+               try {
+                    const child = spawn(this.memvidPath, args, { env });
 
-               return frameId;
-          } catch (err) {
-               const error = err as { stderr?: string; message?: string };
-               throw new Error(
-                    `Failed to put content: ${error.stderr || error.message}`
-               );
-          }
+                    let stdoutBuf = '';
+                    let stderrBuf = '';
+
+                    // write content to stdin
+                    child.stdin.write(content);
+                    child.stdin.end();
+
+                    child.stdout?.on('data', (chunk: Buffer) => {
+                         const text = chunk.toString();
+                         stdoutBuf += text;
+                         this.logger?.info?.(`memvid: ${text.trim()}`);
+                         if (streamEnabled) process.stdout.write(text);
+                    });
+
+                    child.stderr?.on('data', (chunk: Buffer) => {
+                         const text = chunk.toString();
+                         stderrBuf += text;
+                         this.logger?.warn?.(`memvid [stderr]: ${text.trim()}`);
+                         if (streamEnabled) process.stderr.write(text);
+                    });
+
+                    child.on('error', (err) => {
+                         this.logger?.error?.(
+                              `memvid put spawn failed: ${args.join(' ')} - ${String(err)}`
+                         );
+                         reject(err);
+                    });
+
+                    child.on('close', async (code) => {
+                         if (code !== 0) {
+                              const message = `memvid put exited ${code}: ${stderrBuf || stdoutBuf}`;
+                              this.logger?.error?.(message);
+                              return reject(new Error(message));
+                         }
+
+                         const frameId = stdoutBuf.trim();
+
+                         try {
+                              // Check capacity after put
+                              await this.checkAndExpandCapacity(archivePath);
+                              resolve(frameId);
+                         } catch (err) {
+                              reject(err);
+                         }
+                    });
+               } catch (err) {
+                    this.logger?.error?.(
+                         `memvid put failed (exception): ${args.join(' ')} - ${String(err)}`
+                    );
+                    reject(err);
+               }
+          });
      }
 
      /**
