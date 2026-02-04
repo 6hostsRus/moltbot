@@ -27,11 +27,43 @@ export const memvidView = (
                     try {
                          let targetFrameId = frameId;
 
-                         // If the provided frameId is not a simple number, attempt to resolve it
-                         // by searching the archive for a matching uri or id, and prefer numeric frameIndex.
+                         // If the provided frameId is not a simple number, try to resolve it.
                          if (!/^\d+$/.test(String(frameId))) {
+                              // If it looks like a URI, call view by uri directly.
+                              if (String(frameId).startsWith('mv2://') || String(frameId).includes('/')) {
+                                   // Let the client view by uri directly
+                                   try {
+                                        const entry = await memvidClient.view(
+                                             memvidClient.validateArchiveDir(archiveName),
+                                             String(frameId)
+                                        );
+
+                                        return {
+                                             content: [
+                                                  {
+                                                       type: 'text' as const,
+                                                       text: `Frame (by uri):\n\n${entry.content}`,
+                                                  },
+                                             ],
+                                             details: { archiveName, entry },
+                                        };
+                                   } catch (err) {
+                                        return {
+                                             content: [
+                                                  {
+                                                       type: 'text' as const,
+                                                       text: `View by uri failed: ${err}`,
+                                                  },
+                                             ],
+                                             details: { archiveName, frameId, error: String(err) },
+                                        };
+                                   }
+                              }
+
+                              // Otherwise, attempt to find by searching for the identifier (try quoted exact match first)
+                              const quoted = `"${frameId}"`;
                               const searchResults = await memvidClient.search(
-                                   frameId,
+                                   quoted,
                                    memvidClient.validateArchiveDir(archiveName),
                                    10
                               );
@@ -41,12 +73,12 @@ export const memvidView = (
                                    return (
                                         r.frameId === frameId ||
                                         md?.uri === frameId ||
-                                        String(md?.frameIndex) === String(frameId)
+                                        String(md?.frameIndex) === String(frameId) ||
+                                        r.frameId === frameId
                                    );
                               });
 
                               if (match) {
-                                   // Prefer numeric frameIndex when available
                                    const md = match.metadata as any;
                                    if (md?.frameIndex !== undefined) {
                                         targetFrameId = String(md.frameIndex);
@@ -54,15 +86,31 @@ export const memvidView = (
                                         targetFrameId = match.frameId;
                                    }
                               } else {
-                                   return {
-                                        content: [
-                                             {
-                                                  type: 'text' as const,
-                                                  text: `Could not resolve identifier '${frameId}' to a viewable frame. Try using the numeric frame index (e.g. 0) or search to find the frameId.`,
-                                             },
-                                        ],
-                                        details: { archiveName, frameId },
-                                   };
+                                   // As a fallback, try searching without quotes
+                                   const fallback = await memvidClient.search(
+                                        frameId,
+                                        memvidClient.validateArchiveDir(archiveName),
+                                        10
+                                   );
+
+                                   const fallbackMatch = fallback.find((r) => (r.metadata as any)?.uri === frameId || String((r.metadata as any)?.frameIndex) === String(frameId));
+
+                                   if (fallbackMatch) {
+                                        const md = fallbackMatch.metadata as any;
+                                        if (md?.frameIndex !== undefined) targetFrameId = String(md.frameIndex);
+                                   }
+
+                                   if (!targetFrameId) {
+                                        return {
+                                             content: [
+                                                  {
+                                                       type: 'text' as const,
+                                                       text: `Could not resolve identifier '${frameId}' to a viewable frame. Try using the numeric frame index (e.g. 0) or the full mv2:// URI.`,
+                                                  },
+                                             ],
+                                             details: { archiveName, frameId },
+                                        };
+                                   }
                               }
                          }
 
