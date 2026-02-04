@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Memvid Frame",
+  "type": "object",
+  "required": ["frame.title", "frame.source", "frame.role", "frame.timestamp", "frame.uri"],
+  "properties": {
+    "frame.title": { "type": "string" },
+    "frame.content": {
+      "type": ["string", "null"],
+      "description": "Primary payload; may be empty for non-text media"
+    },
+    "frame.search_text": {
+      "type": ["string", "null"],
+      "description": "Indexable extract for fulltext search"
+    },
+    "frame.uri": { "type": "string", "pattern": "^mv2:\\/\\/" },
+    "frame.source": {
+      "type": "string",
+      "enum": ["session-auto-capture", "session-archive", "manual", "system", "external"]
+    },
+    "frame.session_key": { "type": ["string", "null"] },
+    "frame.role": { "type": "string", "enum": ["user", "assistant", "system", "event", "task"] },
+    "frame.timestamp": { "type": "integer", "description": "Unix seconds (ms optional)" },
+    "frame.metadata": { "type": "object" },
+    "frame.summary": { "type": ["string", "null"], "maxLength": 2000 },
+    "frame.embeddings": {
+      "type": "object",
+      "properties": {
+        "engine": { "type": "string" },
+        "vector_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "frame.sensitivity": { "type": "string", "enum": ["public", "private", "pii", "sensitive"] },
+    "frame.retention": {
+      "type": "object",
+      "properties": {
+        "tier": { "type": "string", "enum": ["hot", "warm", "cold"] },
+        "expiryTs": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "frame.precedence": {
+      "type": "string",
+      "description": "Optional field to indicate superseded frames or compaction parent"
+    }
+  },
+  "additionalProperties": false
+}
