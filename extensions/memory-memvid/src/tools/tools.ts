@@ -12,6 +12,7 @@ import { memvidForget } from './memvid_forget';
 import { memvidRepair } from './memvid_repair';
 import { capacityCheck } from './capacity_check';
 import { capacityExpand } from './capacity_expand';
+import { memvidRaw } from './memvid_raw';
 
 export const mergeTools = (
      api: OpenClawPluginApi,
@@ -32,4 +33,5 @@ export const mergeTools = (
      memvidRepair(api, memvidClient);
      capacityCheck(api, memvidClient);
      capacityExpand(api, memvidClient);
+     memvidRaw(api, memvidClient);
 };
