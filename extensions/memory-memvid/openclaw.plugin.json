@@ -1,0 +1,101 @@
+{
+  "id": "memory-memvid",
+  "kind": "memory",
+  "uiHints": {
+    "memvidPath": {
+      "placeholder": "/usr/local/bin/memvid",
+      "label": "Path to Memvid CLI binary"
+    },
+    "archivesDir": {
+      "placeholder": "~/.openclaw/memory/archives",
+      "label": "Directory for .mv2 archive files"
+    },
+    "apiKey": {
+      "sensitive": true,
+      "label": "Optional API key for cloud enrichment"
+    },
+    "enrichmentEngine": {
+      "type": "select",
+      "options": ["basic", "candle", "cloud"],
+      "label": "Enrichment engine"
+    },
+    "autoCapture": {
+      "type": "boolean",
+      "label": "Auto-capture important information"
+    },
+    "autoRecall": {
+      "type": "boolean",
+      "label": "Auto-recall relevant memories"
+    },
+    "autoArchiveSessions": {
+      "type": "boolean",
+      "label": "Auto-archive completed sessions"
+    },
+    "sessionArchiveThresholdMB": {
+      "type": "number",
+      "label": "Session size threshold for auto-archiving (MB)"
+    },
+    "ticketSource": {
+      "type": "select",
+      "options": ["self-hosted", "cloud"],
+      "label": "Ticket source"
+    },
+    "ticketIssuer": {
+      "label": "Issuer name for self-hosted tickets"
+    },
+    "autoExpandCapacity": {
+      "type": "boolean",
+      "label": "Auto-expand archive capacity when near limit"
+    },
+    "capacityThresholdPercent": {
+      "type": "number",
+      "label": "Capacity threshold percentage for auto-expand"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "memvidPath": {
+        "type": "string"
+      },
+      "archivesDir": {
+        "type": "string"
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "enrichmentEngine": {
+        "type": "string",
+        "enum": ["basic", "candle", "cloud"]
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "autoArchiveSessions": {
+        "type": "boolean"
+      },
+      "sessionArchiveThresholdMB": {
+        "type": "number"
+      },
+      "ticketSource": {
+        "type": "string",
+        "enum": ["self-hosted", "cloud"]
+      },
+      "ticketIssuer": {
+        "type": "string"
+      },
+      "autoExpandCapacity": {
+        "type": "boolean"
+      },
+      "capacityThresholdPercent": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 99
+      }
+    }
+  }
+}

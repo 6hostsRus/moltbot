@@ -1,0 +1,17 @@
+{
+     "name": "@openclaw/memory-memvid",
+     "version": "2026.2.1",
+     "description": "OpenClaw Memvid-backed self-hosted memory plugin with auto-recall/capture",
+     "type": "module",
+     "dependencies": {
+          "@sinclair/typebox": "0.34.48"
+     },
+     "devDependencies": {
+          "openclaw": "workspace:*"
+     },
+     "openclaw": {
+          "extensions": [
+               "./index.ts"
+          ]
+     }
+}
