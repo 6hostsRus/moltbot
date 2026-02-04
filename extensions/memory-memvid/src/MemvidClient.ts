@@ -318,12 +318,20 @@ export class MemvidClient {
                     } else if (parsed && Array.isArray(parsed.hits)) {
                          // mv2.result.v2 format (object with hits array)
                          for (const hit of parsed.hits) {
+                              const md = hit.metadata || {};
+                              // Normalize frame index and uri into metadata for callers
+                              if (md && typeof md === 'object') {
+                                   if (hit.frame_id !== undefined) md.frameIndex = hit.frame_id;
+                                   else if (hit.frameId !== undefined) md.frameIndex = hit.frameId;
+                                   if (hit.uri) md.uri = hit.uri;
+                              }
+
                               results.push({
                                    archiveName,
                                    content: hit.text || hit.content || '',
                                    score: hit.score || hit.rank || 0,
-                                   frameId: hit.frame_id || hit.frameId || hit.frame_id || hit.id || hit.uri || '',
-                                   metadata: hit.metadata || {},
+                                   frameId: (hit.frame_id !== undefined ? String(hit.frame_id) : (hit.frameId ? String(hit.frameId) : (hit.id || hit.uri || ''))),
+                                   metadata: md,
                               });
                          }
                     }

@@ -25,16 +25,57 @@ export const memvidView = (
                          frameId: string;
                     };
                     try {
+                         let targetFrameId = frameId;
+
+                         // If the provided frameId is not a simple number, attempt to resolve it
+                         // by searching the archive for a matching uri or id, and prefer numeric frameIndex.
+                         if (!/^\d+$/.test(String(frameId))) {
+                              const searchResults = await memvidClient.search(
+                                   frameId,
+                                   memvidClient.validateArchiveDir(archiveName),
+                                   10
+                              );
+
+                              const match = searchResults.find((r) => {
+                                   const md = r.metadata as any;
+                                   return (
+                                        r.frameId === frameId ||
+                                        md?.uri === frameId ||
+                                        String(md?.frameIndex) === String(frameId)
+                                   );
+                              });
+
+                              if (match) {
+                                   // Prefer numeric frameIndex when available
+                                   const md = match.metadata as any;
+                                   if (md?.frameIndex !== undefined) {
+                                        targetFrameId = String(md.frameIndex);
+                                   } else if (match.frameId) {
+                                        targetFrameId = match.frameId;
+                                   }
+                              } else {
+                                   return {
+                                        content: [
+                                             {
+                                                  type: 'text' as const,
+                                                  text: `Could not resolve identifier '${frameId}' to a viewable frame. Try using the numeric frame index (e.g. 0) or search to find the frameId.`,
+                                             },
+                                        ],
+                                        details: { archiveName, frameId },
+                                   };
+                              }
+                         }
+
                          const entry = await memvidClient.view(
                               memvidClient.validateArchiveDir(archiveName),
-                              frameId
+                              targetFrameId
                          );
 
                          return {
                               content: [
                                    {
                                         type: 'text' as const,
-                                        text: `Frame ${frameId}:\n\n${entry.content}`,
+                                        text: `Frame ${targetFrameId}:\n\n${entry.content}`,
                                    },
                               ],
                               details: {
