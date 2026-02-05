@@ -411,6 +411,9 @@ importers:
         specifier: 0.34.47
         version: 0.34.47
     devDependencies:
+      ajv:
+        specifier: ^8.12.0
+        version: 8.17.1
       openclaw:
         specifier: workspace:*
         version: link:../..

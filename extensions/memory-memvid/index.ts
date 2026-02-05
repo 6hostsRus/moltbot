@@ -42,6 +42,20 @@ const memvidPlugin = {
 
     // Register CLI commands
     Cli(api, memvidClient);
+    // Register forget CLI
+    try {
+      const { ForgetCli } = await import('./src/cli/forget');
+      ForgetCli(api, memvidClient);
+    } catch (e) {
+      api.logger.warn?.(`memory-memvid: failed to register forget CLI: ${e}`);
+    }
+
+    try {
+      const { AuditCli } = await import('./src/cli/audit');
+      AuditCli(api);
+    } catch (e) {
+      api.logger.warn?.(`memory-memvid: failed to register audit CLI: ${e}`);
+    }
 
     // Lifecycle hooks
     // Auto-recall hook

@@ -1,0 +1,14 @@
+{
+  "frame.title": "Example",
+  "frame.content": "This is a sample frame",
+  "frame.search_text": "sample",
+  "frame.uri": "mv2://example/1",
+  "frame.source": "manual",
+  "frame.session_key": null,
+  "frame.role": "system",
+  "frame.timestamp": 1700000000000,
+  "frame.metadata": { "test": true },
+  "frame.summary": "Sample",
+  "frame.sensitivity": "public",
+  "frame.retention": { "tier": "hot" }
+}

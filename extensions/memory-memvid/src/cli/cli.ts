@@ -1,635 +1,356 @@
-import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
-import { MemvidClient } from '../MemvidClient';
-import { readFile } from 'node:fs/promises';
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { readFile, writeFile } from "node:fs/promises";
+import { MemvidClient } from "../MemvidClient";
+import { compactFrames, CompactionOptions } from "../utils/capture_compaction";
+import logging from "../utils/logging";
+import masking from "../utils/masking";
+import { filterResults, composePrependContext } from "../utils/retrieval";
 
-// TODO: Further modularize CLI commands. This file is too big for my taste.
-
-/**
- * Register Memvid CLI commands
- */
+// Register Memvid CLI commands
 export const Cli = (api: OpenClawPluginApi, memvidClient: MemvidClient) =>
-     api.registerCli(
-          ({ program }) => {
-               const memvid = program
-                    .command('memvid')
-                    .description('Memvid memory archive plugin commands');
+  api.registerCli(
+    ({ program }) => {
+      const memvid = program.command("memvid").description("Memvid memory archive plugin commands");
 
-               // memvid archives - List all archives
-               memvid
-                    .command('archives')
-                    .description('List all Memvid archives')
-                    .option('--json', 'Output as JSON')
-                    .action(async (opts: { json?: boolean }) => {
-                         try {
-                              const archives =
-                                   await memvidClient.listArchives();
+      // memvid archive-session <sessionKey> - Archive a session
+      memvid
+        .command("archive-session")
+        .description("Archive a session transcript")
+        .argument("<sessionKey>", "Session key to archive")
+        .option("--archive <name>", "Target archive name")
+        .option("--compact", "Run compaction on the session before storing")
+        .option("--compact-writeback", "If --compact, also write compacted frames into the archive")
+        .option("--dry-run", "When used with --compact-writeback, do not actually write to archive")
+        .option(
+          "--sensitivity-allowlist <list>",
+          "Comma-separated sensitivities to include (e.g. public,private)",
+        )
+        .option("--prefer-latest", "Prefer latest SET frames when composing compaction", true)
+        .action(async (sessionKey: string, opts: any) => {
+          try {
+            const targetArchive = opts.archive || `default-sessions.mv2`;
+            const archivePath = await memvidClient.ensureArchive(targetArchive);
 
-                              if (opts.json) {
-                                   console.log(
-                                        JSON.stringify(archives, null, 2)
-                                   );
-                              } else {
-                                   if (archives.length === 0) {
-                                        console.log('No archives found.');
-                                   } else {
-                                        console.log(
-                                             `Found ${archives.length} archive(s):\n`
-                                        );
-                                        for (const archive of archives) {
-                                             const sizeMB = (
-                                                  (archive.sizeBytes || 0) /
-                                                  1024 ** 2
-                                             ).toFixed(2);
-                                             console.log(
-                                                  `  ${archive.name} (${sizeMB} MB)`
-                                             );
-                                        }
-                                   }
-                              }
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
+            const sessionPath = api.resolvePath(
+              `~/.openclaw/agents/default/sessions/${sessionKey}.jsonl`,
+            );
+
+            const sessionContent = await readFile(sessionPath, "utf-8");
+            const lines = sessionContent.split("\n").filter(Boolean);
+            let archived = 0;
+
+            if (opts.compact) {
+              // build frames from session
+              const frames = lines
+                .map((line) => {
+                  try {
+                    const turn = JSON.parse(line);
+                    return {
+                      frameId: turn.frameId || `session-${turn.timestamp || Date.now()}`,
+                      content: turn.content || JSON.stringify(turn),
+                      timestamp: turn.timestamp || Date.now(),
+                      sessionId: turn.sessionId,
+                      uri: turn.uri,
+                      frameIndex: turn.frameIndex,
+                      sensitivity: turn.sensitivity,
+                      tags: turn.tags,
+                      metadata: turn.metadata,
+                    } as any;
+                  } catch (e) {
+                    return null;
+                  }
+                })
+                .filter(Boolean) as any[];
+
+              const compOpts: CompactionOptions = {
+                timeWindowMs: opts.timeWindowMs ? Number.parseInt(opts.timeWindowMs) : undefined,
+                maxSummaryWords: opts.maxWords ? Number.parseInt(opts.maxWords) : undefined,
+                sensitivityThreshold: opts.sensitivityAllowlist
+                  ? opts.sensitivityAllowlist.split(",").map((s: string) => s.trim())
+                  : undefined,
+                preferLatest:
+                  opts.preferLatest !== undefined ? Boolean(opts.preferLatest) : undefined,
+              };
+
+              const compacted = compactFrames(frames, compOpts);
+
+              const outPath = `${sessionPath}.compacted.jsonl`;
+              const linesOut = compacted.map((c) =>
+                JSON.stringify({
+                  frameId: c.frameId,
+                  timestamp: c.timestamp,
+                  content: c.content,
+                  metadata: c.metadata,
+                  constituents: c.constituents,
+                }),
+              );
+              await writeFile(outPath, linesOut.join("\n") + "\n", "utf-8");
+              console.log(`Wrote compacted session preview to ${outPath}`);
+
+              if (
+                opts.compactWriteback ||
+                opts.compactWriteback === true ||
+                opts.compactWriteback === undefined
+              ) {
+                // support both --compact-writeback and camelCase opts depending on commander parsing
+                if (opts.dryRun) {
+                  console.log(
+                    `Dry run: would write ${compacted.length} compacted frames to archive ${targetArchive}`,
+                  );
+                } else {
+                  for (const c of compacted) {
+                    await memvidClient.put(archivePath, c.content, {
+                      source: "compaction",
+                      timestamp: c.timestamp,
+                      constituents: c.constituents,
                     });
+                    archived++;
+                  }
+                  console.log(`Wrote ${archived} compacted frames into ${targetArchive}`);
+                }
+              }
 
-               // memvid create <name> - Create new archive
-               memvid
-                    .command('create')
-                    .description('Create new Memvid archive')
-                    .argument('<name>', 'Archive name')
-                    .option('--no-ticket', 'Skip initial ticket creation')
-                    .action(async (name: string, opts: any) => {
-                         try {
-                              const archivePath =
-                                   await memvidClient.createArchive(name);
-                              console.log(`Created archive: ${archivePath}`);
+              return;
+            }
 
-                              if (opts.ticket !== false) {
-                                   console.log('Issued 1GB self-hosted ticket');
-                              }
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
+            // No compaction: store each turn as-is
+            for (const line of lines) {
+              try {
+                const turn = JSON.parse(line);
+                const frameContent = JSON.stringify(turn, null, 2);
+                await memvidClient.put(archivePath, frameContent, {
+                  source: "session-archive",
+                  sessionKey,
+                  timestamp: turn.timestamp || Date.now(),
+                  role: turn.role,
+                });
+                archived++;
+              } catch (parseErr) {
+                api.logger.warn?.(`Failed to parse session line: ${parseErr}`);
+              }
+            }
+
+            console.log(
+              `Archived ${archived} turns from session ${sessionKey} to ${targetArchive}`,
+            );
+          } catch (err) {
+            console.error(`Error: ${err}`);
+            process.exit(1);
+          }
+        });
+
+      // memvid compose <query> - Compose prependContext using retrieval rules
+      memvid
+        .command("compose")
+        .description("Compose memory prependContext and decisions for a query")
+        .argument("<query>", "Search query")
+        .option("--archive <name>", "Specific archive to search")
+        .option("--limit <n>", "Max results", "3")
+        .option("--recency-ms <ms>", "Recency window in ms")
+        .option("--min-score <s>", "Minimum score threshold")
+        .option("--token-budget <n>", "Token budget", "3000")
+        .action(async (query: string, opts: any) => {
+          try {
+            const results = await memvidClient.search(
+              query,
+              opts.archive ? memvidClient.validateArchiveDir(opts.archive) : undefined,
+              Number.parseInt(opts.limit || "3"),
+            );
+
+            const filtered = filterResults(results, {
+              recencyMs: opts.recencyMs ? Number.parseInt(opts.recencyMs) : undefined,
+              minScore: opts.minScore ? Number.parseFloat(opts.minScore) : undefined,
+              allowedSensitivity: undefined,
+            });
+
+            const composed = composePrependContext(filtered, {
+              limit: Number.parseInt(opts.limit || "3"),
+              tokenBudget: Number.parseInt(opts.tokenBudget || "3000"),
+            });
+
+            let output = composed.prependContext || "No relevant memories.";
+            // mask output by default
+            output = masking.applyMaskToFrameContent(output);
+            console.log(output);
+            logging.structuredLog({
+              timestamp: Date.now(),
+              level: "info",
+              event: "compose-output",
+              runId: logging.genRunId(),
+              details: { query },
+              reason: "masked",
+            });
+            console.log("\nDecisions:");
+            console.log(JSON.stringify(composed.decisions, null, 2));
+          } catch (err) {
+            console.error(`Error: ${err}`);
+            process.exit(1);
+          }
+        });
+
+      // memvid compact <session|archive> - Preview or write-back compaction
+      memvid
+        .command("compact")
+        .description("Compact a session JSONL file or preview compaction for an archive")
+        .option("--session <path>", "Path to a session .jsonl file for compaction")
+        .option("--archive <name>", "Archive name to preview compaction (searches recent entries)")
+        .option("--time-window-ms <ms>", "Compaction time window in ms")
+        .option("--max-words <n>", "Max words in compacted summary")
+        .option(
+          "--sensitivity-allowlist <list>",
+          "Comma-separated sensitivities to include (e.g. public,private)",
+        )
+        .option("--prefer-latest", "Prefer latest SET frames when composing compaction", true)
+        .option("--preview", "Print compacted frames to stdout (default)", true)
+        .option("--write-back", "Write compacted results to a new file or archive")
+        .option("--dry-run", "When used with --write-back, don't actually write")
+        .action(async (opts: any) => {
+          try {
+            const compOpts: CompactionOptions = {
+              timeWindowMs: opts.timeWindowMs ? Number.parseInt(opts.timeWindowMs) : undefined,
+              maxSummaryWords: opts.maxWords ? Number.parseInt(opts.maxWords) : undefined,
+              sensitivityThreshold: opts.sensitivityAllowlist
+                ? opts.sensitivityAllowlist.split(",").map((s: string) => s.trim())
+                : undefined,
+              preferLatest:
+                opts.preferLatest !== undefined ? Boolean(opts.preferLatest) : undefined,
+            };
+
+            if (opts.session) {
+              const sessionPath = api.resolvePath(opts.session);
+              const content = await readFile(sessionPath, "utf-8");
+              const lines = content.split("\n").filter(Boolean);
+              const frames = lines
+                .map((l) => {
+                  try {
+                    const turn = JSON.parse(l);
+                    return {
+                      frameId: turn.frameId || `session-${turn.timestamp || Date.now()}`,
+                      content: turn.content || JSON.stringify(turn),
+                      timestamp: turn.timestamp || Date.now(),
+                      sessionId: turn.sessionId,
+                      uri: turn.uri,
+                      frameIndex: turn.frameIndex,
+                      sensitivity: turn.sensitivity,
+                      tags: turn.tags,
+                    } as any;
+                  } catch (e) {
+                    return null;
+                  }
+                })
+                .filter(Boolean) as any[];
+
+              const compacted = compactFrames(frames, compOpts);
+
+              if (opts.preview || !opts.writeBack) {
+                console.log(`Compacted ${compacted.length} groups from ${frames.length} frames:\n`);
+                for (const c of compacted) {
+                  const masked = masking.applyMaskToFrameContent(c.content);
+                  console.log(
+                    `- ${c.frameId} (includes ${c.constituents.length} frames) @ ${new Date(c.timestamp).toISOString()}`,
+                  );
+                  console.log(`${masked}\n`);
+                }
+                logging.structuredLog({
+                  timestamp: Date.now(),
+                  level: "info",
+                  event: "compaction-preview",
+                  runId: logging.genRunId(),
+                  frames: compacted.map((c) => c.frameId),
+                  details: { sessionPath },
+                  reason: "masked",
+                });
+              }
+
+              if (opts.writeBack) {
+                const outPath = `${sessionPath}.compacted.jsonl`;
+                if (opts.dryRun) {
+                  console.log(
+                    `Dry run: would write ${compacted.length} compacted frames to ${outPath}`,
+                  );
+                } else {
+                  const linesOut = compacted.map((c) =>
+                    JSON.stringify({
+                      frameId: c.frameId,
+                      timestamp: c.timestamp,
+                      content: c.content,
+                      metadata: c.metadata,
+                      constituents: c.constituents,
+                    }),
+                  );
+                  await writeFile(outPath, linesOut.join("\n") + "\n", "utf-8");
+                  console.log(`Wrote compacted session to ${outPath}`);
+                }
+              }
+
+              return;
+            }
+
+            if (opts.archive) {
+              const archivePath = memvidClient.validateArchiveDir(opts.archive);
+              const results = await memvidClient.search("", archivePath, 200);
+              const frames = results.map((r: any) => ({
+                frameId: r.frameId,
+                content: r.content,
+                timestamp: r.metadata?.timestamp || Date.now(),
+                sessionId: r.metadata?.sessionId,
+                uri: r.metadata?.uri,
+                frameIndex: r.metadata?.frameIndex,
+                sensitivity: r.metadata?.sensitivity,
+                tags: r.metadata?.tags,
+              }));
+              const compacted = compactFrames(frames, compOpts);
+
+              if (opts.preview || !opts.writeBack) {
+                console.log(
+                  `Preview: Compacted ${compacted.length} groups from ${frames.length} frames in ${opts.archive}:\n`,
+                );
+                for (const c of compacted) {
+                  const masked = masking.applyMaskToFrameContent(c.content);
+                  console.log(
+                    `- ${c.frameId} (includes ${c.constituents.length} frames) @ ${new Date(c.timestamp).toISOString()}`,
+                  );
+                  console.log(`${masked}\n`);
+                }
+                logging.structuredLog({
+                  timestamp: Date.now(),
+                  level: "info",
+                  event: "compaction-preview",
+                  runId: logging.genRunId(),
+                  frames: compacted.map((c) => c.frameId),
+                  details: { archive: opts.archive },
+                  reason: "masked",
+                });
+              }
+
+              if (opts.writeBack) {
+                if (opts.dryRun) {
+                  console.log(
+                    `Dry run: would write ${compacted.length} compacted frames into archive ${opts.archive}`,
+                  );
+                } else {
+                  const targetArchive = await memvidClient.ensureArchive(opts.archive);
+                  for (const c of compacted) {
+                    await memvidClient.put(targetArchive, c.content, {
+                      source: "compaction",
+                      timestamp: c.timestamp,
+                      constituents: c.constituents,
                     });
+                  }
+                  console.log(`Wrote ${compacted.length} compacted frames into ${opts.archive}`);
+                }
+              }
 
-               // memvid archive-session <sessionKey> - Archive a session
-               memvid
-                    .command('archive-session')
-                    .description('Archive a session transcript')
-                    .argument('<sessionKey>', 'Session key to archive')
-                    .option('--archive <name>', 'Target archive name')
-                    .action(async (sessionKey: string, opts: any) => {
-                         try {
-                              // TODO: touch this up to get the active agent session
-                              const targetArchive =
-                                   opts.archive || `default-sessions.mv2`;
-                              const archivePath =
-                                   await memvidClient.ensureArchive(
-                                        targetArchive
-                                   );
-                              // TODO: figure out how to get the session path of the active agent
-                              const sessionPath = api.resolvePath(
-                                   `~/.openclaw/agents/default/sessions/${sessionKey}.jsonl`
-                              );
+              return;
+            }
 
-                              const sessionContent = await readFile(
-                                   sessionPath,
-                                   'utf-8'
-                              );
-                              const lines = sessionContent
-                                   .split('\n')
-                                   .filter(Boolean);
-                              let archived = 0;
-
-                              for (const line of lines) {
-                                   try {
-                                        const turn = JSON.parse(line);
-                                        const frameContent = JSON.stringify(
-                                             turn,
-                                             null,
-                                             2
-                                        );
-                                        await memvidClient.put(
-                                             archivePath,
-                                             frameContent,
-                                             {
-                                                  source: 'session-archive',
-                                                  sessionKey,
-                                                  timestamp:
-                                                       turn.timestamp ||
-                                                       Date.now(),
-                                                  role: turn.role,
-                                             }
-                                        );
-                                        archived++;
-                                   } catch (parseErr) {
-                                        api.logger.warn?.(
-                                             `Failed to parse session line: ${parseErr}`
-                                        );
-                                   }
-                              }
-
-                              console.log(
-                                   `Archived ${archived} turns from session ${sessionKey} to ${targetArchive}`
-                              );
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid search <query> - Search archives
-               memvid
-                    .command('search')
-                    .description('Search archives')
-                    .argument('<query>', 'Search query')
-                    .option('--archive <name>', 'Specific archive to search')
-                    .option('--limit <n>', 'Max results', '5')
-                    .action(async (query: string, opts: any) => {
-                         try {
-                              const results = await memvidClient.search(
-                                   query,
-                                   memvidClient.validateArchiveDir(
-                                        opts.archive
-                                   ),
-                                   Number.parseInt(opts.limit)
-                              );
-
-                              if (results.length === 0) {
-                                   console.log('No results found.');
-                              } else {
-                                   console.log(
-                                        `Found ${results.length} result(s):\n`
-                                   );
-                                   for (const [
-                                        i,
-                                        result,
-                                   ] of results.entries()) {
-                                        console.log(
-                                             `${i + 1}. [${result.archiveName}] ${result.frameId || 'N/A'}`
-                                        );
-                                        console.log(
-                                             `   ${result.content.substring(0, 200)}${result.content.length > 200 ? '...' : ''}\n`
-                                        );
-                                   }
-                              }
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid ask <question> - Ask natural language question
-               memvid
-                    .command('ask')
-                    .description('Ask a question to archives')
-                    .argument('<question>', 'Natural language question')
-                    .option('--archive <name>', 'Specific archive to query')
-                    .action(async (question: string, opts: any) => {
-                         try {
-                              const answer = await memvidClient.ask(
-                                   question,
-                                   memvidClient.validateArchiveDir(opts.archive)
-                              );
-                              console.log(answer);
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid store <content> - Store memory
-               memvid
-                    .command('store')
-                    .description('Store information in archive')
-                    .argument('<content>', 'Content to remember')
-                    .option('--archive <name>', 'Target archive')
-                    .option('--metadata <json>', 'Metadata as JSON')
-                    .action(async (content: string, opts: any) => {
-                         try {
-                              // TODO: determine if I need to ensureArchive anywhere I have
-                              // archivePath usage. This may be handy.
-                              const targetArchive =
-                                   opts.archive || `default-memory.mv2`;
-                              const archivePath =
-                                   await memvidClient.ensureArchive(
-                                        targetArchive
-                                   );
-
-                              const metadata = opts.metadata
-                                   ? JSON.parse(opts.metadata)
-                                   : {};
-                              const frameId = await memvidClient.put(
-                                   archivePath,
-                                   content,
-                                   {
-                                        ...metadata,
-                                        source: 'cli-store',
-                                        timestamp: Date.now(),
-                                   }
-                              );
-
-                              console.log(
-                                   `Stored in ${targetArchive} (frame: ${frameId})`
-                              );
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid timeline - Show timeline
-               memvid
-                    .command('timeline')
-                    .description('Show archive timeline')
-                    .argument('<archive>', 'Archive name')
-                    .option('--start <date>', 'Start date')
-                    .option('--end <date>', 'End date')
-                    .option('--limit <n>', 'Max results')
-                    .action(async (archive: string, opts: any) => {
-                         try {
-                              const entries = await memvidClient.timeline(
-                                   memvidClient.validateArchiveDir(archive),
-                                   {
-                                        startDate: opts.start,
-                                        endDate: opts.end,
-                                        limit: opts.limit
-                                             ? Number.parseInt(opts.limit)
-                                             : undefined,
-                                   }
-                              );
-
-                              if (entries.length === 0) {
-                                   console.log('No timeline entries found.');
-                              } else {
-                                   console.log(
-                                        `Timeline (${entries.length} entries):\n`
-                                   );
-                                   for (const entry of entries) {
-                                        const date = new Date(
-                                             entry.timestamp
-                                        ).toISOString();
-                                        console.log(
-                                             `[${date}] ${entry.frameId}`
-                                        );
-                                        console.log(
-                                             `  ${entry.content.substring(0, 150)}\n`
-                                        );
-                                   }
-                              }
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid view <archive> <frameId> - View frame details
-               memvid
-                    .command('view')
-                    .description('View archived entry details')
-                    .argument('<archive>', 'Archive name')
-                    .argument('<frameId>', 'Frame ID')
-                    .action(async (archive: string, frameId: string) => {
-                         try {
-                              const entry = await memvidClient.view(
-                                   memvidClient.validateArchiveDir(archive),
-                                   frameId
-                              );
-
-                              console.log(`Frame: ${entry.frameId}`);
-                              console.log(
-                                   `Timestamp: ${new Date(entry.timestamp).toISOString()}`
-                              );
-                              console.log(`\nContent:\n${entry.content}`);
-
-                              if (entry.metadata) {
-                                   console.log(
-                                        `\nMetadata:\n${JSON.stringify(entry.metadata, null, 2)}`
-                                   );
-                              }
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid stats - Show statistics
-               memvid
-                    .command('stats')
-                    .description('Show archive statistics')
-                    .option('--archive <name>', 'Specific archive')
-                    .action(async (opts: any) => {
-                         try {
-                              if (opts.archive) {
-                                   const stats = await memvidClient.stats(
-                                        memvidClient.validateArchiveDir(
-                                             opts.archive
-                                        )
-                                   );
-
-                                   console.log(`Archive: ${opts.archive}`);
-                                   console.log(
-                                        `Entries: ${stats.totalEntries}`
-                                   );
-                                   console.log(
-                                        `Size: ${(stats.sizeBytes / 1024 ** 2).toFixed(2)} MB`
-                                   );
-                                   if (stats.capacityBytes) {
-                                        console.log(
-                                             `Capacity: ${(stats.capacityBytes / 1024 ** 3).toFixed(2)} GB`
-                                        );
-                                   }
-                                   if (stats.usagePercent !== undefined) {
-                                        console.log(
-                                             `Usage: ${stats.usagePercent.toFixed(1)}%`
-                                        );
-                                   }
-                              } else {
-                                   const archives =
-                                        await memvidClient.listArchives();
-                                   let totalEntries = 0;
-                                   let totalSize = 0;
-
-                                   for (const archive of archives) {
-                                        try {
-                                             const stats =
-                                                  await memvidClient.stats(
-                                                       archive.path
-                                                  );
-                                             totalEntries += stats.totalEntries;
-                                             totalSize += stats.sizeBytes;
-                                        } catch (err) {
-                                             api.logger.warn?.(
-                                                  `Failed to get stats for ${archive.name}: ${err}`
-                                             );
-                                        }
-                                   }
-
-                                   console.log(
-                                        `Total archives: ${archives.length}`
-                                   );
-                                   console.log(
-                                        `Total entries: ${totalEntries}`
-                                   );
-                                   console.log(
-                                        `Total size: ${(totalSize / 1024 ** 2).toFixed(2)} MB`
-                                   );
-                              }
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid enrich - Enrich archives
-               memvid
-                    .command('enrich')
-                    .description('Enrich archive with embeddings')
-                    .argument('<archive>', 'Archive name')
-                    .option(
-                         '--engine <type>',
-                         'Enrichment engine (basic|candle|cloud)',
-                         'basic'
-                    )
-                    .option(
-                         '--download-candle',
-                         'Download candle engine if needed'
-                    )
-                    .action(async (archive: string, opts: any) => {
-                         try {
-                              if (
-                                   opts.engine === 'candle' &&
-                                   opts.downloadCandle
-                              ) {
-                                   console.log(
-                                        'Note: candle engine download may be required'
-                                   );
-                              }
-
-                              await memvidClient.enrich(
-                                   memvidClient.validateArchiveDir(archive),
-                                   opts.engine
-                              );
-                              console.log(
-                                   `Enriched ${archive} with ${opts.engine} engine`
-                              );
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid repair - Repair archive
-               memvid
-                    .command('repair')
-                    .description('Repair archive integrity')
-                    .argument('<archive>', 'Archive name')
-                    .action(async (archive: string) => {
-                         try {
-                              await memvidClient.repair(
-                                   memvidClient.validateArchiveDir(archive)
-                              );
-                              console.log(`Repaired ${archive}`);
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid vacuum - Vacuum archive
-               memvid
-                    .command('vacuum')
-                    .description('Optimize archive storage')
-                    .argument('<archive>', 'Archive name')
-                    .action(async (archive: string) => {
-                         try {
-                              await memvidClient.vacuum(
-                                   memvidClient.validateArchiveDir(archive)
-                              );
-                              console.log(`Vacuumed ${archive}`);
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid capacity - Check/manage capacity
-               const capacity = memvid
-                    .command('capacity')
-                    .description('Manage archive capacity');
-
-               capacity
-                    .command('check')
-                    .description('Check archive capacity')
-                    .argument('<archive>', 'Archive name')
-                    .action(async (archive: string) => {
-                         try {
-                              const capacityInfo =
-                                   await memvidClient.checkCapacity(
-                                        memvidClient.validateArchiveDir(archive)
-                                   );
-
-                              console.log(`Archive: ${archive}`);
-                              console.log(
-                                   `Capacity: ${(capacityInfo.capacityBytes / 1024 ** 3).toFixed(2)} GB`
-                              );
-                              console.log(
-                                   `Used: ${(capacityInfo.currentBytes / 1024 ** 2).toFixed(2)} MB`
-                              );
-                              console.log(
-                                   `Usage: ${capacityInfo.usagePercent.toFixed(1)}%`
-                              );
-                              console.log(
-                                   `Should expand: ${capacityInfo.shouldExpand ? 'Yes' : 'No'}`
-                              );
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               capacity
-                    .command('expand')
-                    .description('Expand archive capacity')
-                    .argument('<archive>', 'Archive name')
-                    .argument('<sizeGB>', 'New size in GB')
-                    .action(async (archive: string, sizeGB: string) => {
-                         try {
-                              const newSizeBytes =
-                                   Number.parseFloat(sizeGB) * 1024 ** 3;
-                              await memvidClient.expandCapacity(
-                                   memvidClient.validateArchiveDir(archive),
-                                   newSizeBytes
-                              );
-
-                              console.log(
-                                   `Expanded ${archive} to ${sizeGB} GB`
-                              );
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               // memvid tickets - Manage tickets (self-hosted focus)
-               const tickets = memvid
-                    .command('tickets')
-                    .description('Manage archive tickets');
-
-               tickets
-                    .command('list')
-                    .description('List archive tickets')
-                    .argument('<archive>', 'Archive name')
-                    .action(async (archive: string) => {
-                         try {
-                              const ticketInfo = await memvidClient.listTickets(
-                                   memvidClient.validateArchiveDir(archive)
-                              );
-
-                              if (ticketInfo.ticket) {
-                                   console.log(`Ticket for ${archive}:`);
-                                   console.log(
-                                        `  Issuer: ${ticketInfo.ticket.issuer}`
-                                   );
-                                   console.log(
-                                        `  Sequence: ${ticketInfo.ticket.seq_no}`
-                                   );
-                                   console.log(
-                                        `  Capacity: ${(ticketInfo.ticket.capacity_bytes / 1024 ** 3).toFixed(2)} GB`
-                                   );
-
-                                   if (ticketInfo.ticket.expires_at) {
-                                        console.log(
-                                             `  Expires: ${new Date(ticketInfo.ticket.expires_at * 1000).toISOString()}`
-                                        );
-                                   }
-                              }
-
-                              if (ticketInfo.usage) {
-                                   console.log(`\nUsage:`);
-                                   console.log(
-                                        `  Used: ${(ticketInfo.usage.usage_bytes / 1024 ** 2).toFixed(2)} MB`
-                                   );
-                                   console.log(
-                                        `  Percentage: ${ticketInfo.usage.usage_percent.toFixed(1)}%`
-                                   );
-                              }
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-
-               tickets
-                    .command('issue')
-                    .description('Issue self-hosted ticket')
-                    .argument('<archive>', 'Archive name')
-                    .option(
-                         '--issuer <name>',
-                         'Ticket issuer',
-                         'openclaw.local'
-                    )
-                    .requiredOption('--seq <n>', 'Sequence number (required)')
-                    .requiredOption(
-                         '--capacity <bytes>',
-                         'Capacity in bytes (required)'
-                    )
-                    .option('--expires-in <seconds>', 'Expiration time')
-                    .action(
-                         async (
-                              archive: string,
-                              opts: {
-                                   issuer: string;
-                                   seq: string;
-                                   capacity: string;
-                                   expiresIn?: string;
-                              }
-                         ) => {
-                              try {
-                                   await memvidClient.issueTicket(
-                                        memvidClient.validateArchiveDir(
-                                             archive
-                                        ),
-                                        {
-                                             issuer: opts.issuer,
-                                             seq: Number.parseInt(opts.seq),
-                                             capacity: Number.parseInt(
-                                                  opts.capacity
-                                             ),
-                                             expiresIn: opts.expiresIn
-                                                  ? Number.parseInt(
-                                                         opts.expiresIn
-                                                    )
-                                                  : undefined,
-                                        }
-                                   );
-
-                                   console.log(
-                                        `Issued ticket for ${archive} (seq: ${opts.seq}, capacity: ${(Number.parseInt(opts.capacity) / 1024 ** 3).toFixed(2)} GB)`
-                                   );
-                              } catch (err) {
-                                   console.error(`Error: ${err}`);
-                                   process.exit(1);
-                              }
-                         }
-                    );
-
-               tickets
-                    .command('revoke')
-                    .description('Revoke archive ticket')
-                    .argument('<archive>', 'Archive name')
-                    .action(async (archive: string) => {
-                         try {
-                              await memvidClient.revokeTicket(
-                                   memvidClient.validateArchiveDir(archive)
-                              );
-                              console.log(`Revoked ticket for ${archive}`);
-                         } catch (err) {
-                              console.error(`Error: ${err}`);
-                              process.exit(1);
-                         }
-                    });
-          },
-          { commands: ['memvid'] }
-     );
+            console.error("Error: must specify --session <path> or --archive <name>");
+            process.exit(1);
+          } catch (err) {
+            console.error(`Error: ${err}`);
+            process.exit(1);
+          }
+        });
+    },
+    { commands: ["memvid"] },
+  );
