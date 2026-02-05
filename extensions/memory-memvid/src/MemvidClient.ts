@@ -22,9 +22,12 @@ import logging from "./utils/logging";
  * can be disabled by setting MEMVID_STREAM_OUTPUT=0 in the environment.
  */
 import * as scheduler from "./utils/scheduler";
+import { SessionRecorder } from "./utils/session_recorder";
 
 export class MemvidClient {
   public scheduler: any;
+
+  private recorder?: SessionRecorder;
 
   constructor(
     private memvidPath: string,
@@ -32,6 +35,7 @@ export class MemvidClient {
     private apiKey: string,
     private capacityThreshold: number,
     private logger?: OpenClawPluginApi["logger"],
+    recorder?: SessionRecorder,
   ) {
     // attach scheduler API for CLI integration
     this.scheduler = {
@@ -40,6 +44,7 @@ export class MemvidClient {
       listJobs: scheduler.listJobs,
       deleteJob: scheduler.deleteJob,
     };
+    if (recorder) this.recorder = recorder;
   }
 
   getArchivesDir(): string {
@@ -289,6 +294,25 @@ export class MemvidClient {
               latencyMs: latency,
               reason: "stored",
             });
+
+            // If recorder is present, emit a session frame linking agentFrameId (if provided) to stored frame
+            try {
+              if (this.recorder) {
+                const agentFrameId =
+                  metadata && typeof metadata === "object" && (metadata as any).agentFrameId
+                    ? (metadata as any).agentFrameId
+                    : undefined;
+                this.recorder.frame({
+                  type: "info",
+                  timestamp: Date.now(),
+                  id: `stored-${frameId}`,
+                  metadata: { archivePath, frameId, agentFrameId, originalMetadata: metadata },
+                });
+              }
+            } catch (recErr) {
+              this.logger?.warn?.(`session recorder write failed: ${recErr}`);
+            }
+
             resolve(frameId);
           } catch (err) {
             logging.structuredLog({
@@ -675,5 +699,66 @@ export class MemvidClient {
     } catch (err) {
       this.logger?.warn?.(`Auto-expand check failed: ${err}`);
     }
+  }
+
+  /* Session helpers: wrap memvid session CLI commands */
+  async sessionStart(
+    archivePath: string,
+    name?: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<string> {
+    const args = ["session", "start"];
+    if (name) args.push("--name", name);
+    if (metadata) args.push("--metadata", JSON.stringify(metadata));
+
+    const out = await this.exec(args, archivePath);
+    this.logger?.info?.(`session start: ${out}`);
+    return out;
+  }
+
+  async sessionEnd(archivePath: string, name?: string): Promise<string> {
+    const args = ["session", "end"];
+    if (name) args.push("--name", name);
+
+    const out = await this.exec(args, archivePath);
+    this.logger?.info?.(`session end: ${out}`);
+    return out;
+  }
+
+  async sessionList(archivePath?: string): Promise<any> {
+    const args = ["session", "list", "--json"];
+    const out = await this.exec(args, archivePath);
+    try {
+      return JSON.parse(out);
+    } catch (e) {
+      return out;
+    }
+  }
+
+  async sessionReplay(
+    archivePath: string,
+    sessionNameOrId: string,
+    opts?: { adaptive?: boolean; topK?: number },
+  ): Promise<string> {
+    const args = ["session", "replay"];
+    if (opts?.adaptive) args.push("--adaptive");
+    if (typeof opts?.topK === "number") args.push("--top-k", String(opts.topK));
+    args.push(sessionNameOrId);
+
+    const out = await this.exec(args, archivePath);
+    return out;
+  }
+
+  /**
+   * Export session frames to a JSONL file by calling session replay and writing output
+   */
+  async sessionExport(
+    archivePath: string,
+    sessionNameOrId: string,
+    outPath: string,
+  ): Promise<void> {
+    const data = await this.sessionReplay(archivePath, sessionNameOrId, { adaptive: false });
+    // write raw output to outPath
+    await fs.promises.writeFile(outPath, data + "\n");
   }
 }
