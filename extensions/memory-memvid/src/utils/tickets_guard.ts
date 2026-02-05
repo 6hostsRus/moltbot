@@ -15,13 +15,15 @@ export type GuardConfig = {
   maxRetries?: number; // default 8
 };
 
+import { DEFAULT_CONFIG } from "../types/types";
+
 export function defaultConfig(): GuardConfig {
   return {
-    thresholdPercent: 85,
-    manualConfirmBytes: 10 * 1024 * 1024 * 1024,
-    initialBackoffMs: 60 * 60 * 1000,
-    maxBackoffMs: 7 * 24 * 60 * 60 * 1000,
-    maxRetries: 8,
+    thresholdPercent: DEFAULT_CONFIG.capacityThresholdPercent,
+    manualConfirmBytes: DEFAULT_CONFIG.manualConfirmBytes,
+    initialBackoffMs: DEFAULT_CONFIG.schedulerInitialBackoffMs,
+    maxBackoffMs: DEFAULT_CONFIG.schedulerMaxBackoffMs,
+    maxRetries: DEFAULT_CONFIG.schedulerMaxRetries,
   };
 }
 

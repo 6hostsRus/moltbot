@@ -161,5 +161,20 @@ export function TicketsCli(api: any, memvidClient: any) {
           console.error(`Failed to run due jobs: ${e}`);
         }
       });
+
+    schedulerCmd
+      .command("enqueue")
+      .description("Enqueue a retry job for an archive")
+      .argument("<archive>", "Archive name")
+      .argument("<bytes>", "Recommended bytes")
+      .action(async (archive: string, bytes: string) => {
+        try {
+          const archivePath = memvidClient.validateArchiveDir(archive);
+          const id = memvidClient.scheduler.enqueueRetry(archivePath, Number(bytes));
+          console.log(`Enqueued job ${id} for ${archive} recommending ${bytes} bytes`);
+        } catch (e) {
+          console.error(`Failed to enqueue job: ${e}`);
+        }
+      });
   });
 }

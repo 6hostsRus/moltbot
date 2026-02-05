@@ -52,6 +52,18 @@ Key methods (async unless noted)
 - checkCapacity(archivePath: string): Promise<CapacityInfo>
 - expandCapacity(archivePath: string, newSizeBytes: number): Promise<void>
 
+Configuration & scheduler notes
+
+The plugin exposes configuration keys (see src/types/types.ts and CONFIG.md) including capacity and scheduler tuning options:
+
+- capacityThresholdPercent (default 85) — percent usage that triggers expansion logic
+- manualConfirmBytes (default 10GB) — if recommended expansion exceeds this many bytes, operator confirmation is required
+- schedulerInitialBackoffMs (default 3600000 ms) — initial backoff used by scheduler
+- schedulerMaxBackoffMs (default 604800000 ms) — maximum backoff
+- schedulerMaxRetries (default 8) — maximum retry attempts
+
+See CONFIG.md at the repo root for a short summary and planning/05-tickets-cron-examples.md for scheduler invocation examples.
+
 Internal helpers (not intended for external callers)
 
 - exec(args: string[], archivePath?: string): Promise<string> — low-level spawning with streaming/logging
@@ -61,7 +73,7 @@ Behavioral notes and assumptions
 
 - The client assumes a memvid binary is available at memvidPath and that the CLI outputs JSON for commands where --json is used. It is defensive about parsing and logs raw output when parsing fails.
 - put() and exec() stream child process stdout/stderr to the injected logger. This makes testability easier when memvidPath is an echo or similar shim.
-- Capacity management relies on the memvid ticket APIs; the client auto-issues an expanded ticket (doubling capacity) when usage crosses the configured threshold.
+- Capacity management relies on the memvid ticket APIs; the client auto-issues an expanded ticket when usage crosses the configured threshold — automatic expansion is allowed by default but can be tuned via config.
 - Many media and extraction features in memvid are CLI-first; MemvidClient intentionally embraces invoking the CLI rather than re-implementing ingestion logic.
 
 Testing tips
