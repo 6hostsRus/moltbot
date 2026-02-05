@@ -14,7 +14,6 @@ import {
   TimelineOptions,
 } from "./types/types";
 import logging from "./utils/logging";
-
 /**
  * Memvid CLI wrapper client
  *
@@ -22,14 +21,26 @@ import logging from "./utils/logging";
  * and optionally to the process stdout/stderr when running locally. Streaming
  * can be disabled by setting MEMVID_STREAM_OUTPUT=0 in the environment.
  */
+import * as scheduler from "./utils/scheduler";
+
 export class MemvidClient {
+  public scheduler: any;
+
   constructor(
     private memvidPath: string,
     private archivesDir: string,
     private apiKey: string,
     private capacityThreshold: number,
     private logger?: OpenClawPluginApi["logger"],
-  ) {}
+  ) {
+    // attach scheduler API for CLI integration
+    this.scheduler = {
+      enqueueRetry: scheduler.enqueueRetry,
+      runDueJobs: scheduler.runDueJobs,
+      listJobs: scheduler.listJobs,
+      deleteJob: scheduler.deleteJob,
+    };
+  }
 
   getArchivesDir(): string {
     return this.archivesDir;

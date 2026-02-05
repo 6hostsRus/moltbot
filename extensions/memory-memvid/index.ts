@@ -1,6 +1,8 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { stat, readFile, mkdir } from "node:fs/promises";
+import { AuditCli } from "./src/cli/audit.ts";
 import { Cli } from "./src/cli/cli.ts";
+import { ForgetCli } from "./src/cli/forget.ts";
 import { MemvidClient } from "./src/MemvidClient.ts";
 import { mergeTools } from "./src/tools/tools.ts";
 import { memvidConfigSchema } from "./src/types/types.ts";
@@ -43,19 +45,9 @@ const memvidPlugin = {
     // Register CLI commands
     Cli(api, memvidClient);
     // Register forget CLI
-    try {
-      const { ForgetCli } = await import('./src/cli/forget');
-      ForgetCli(api, memvidClient);
-    } catch (e) {
-      api.logger.warn?.(`memory-memvid: failed to register forget CLI: ${e}`);
-    }
-
-    try {
-      const { AuditCli } = await import('./src/cli/audit');
-      AuditCli(api);
-    } catch (e) {
-      api.logger.warn?.(`memory-memvid: failed to register audit CLI: ${e}`);
-    }
+    ForgetCli(api, memvidClient);
+    // Register audit CLI
+    AuditCli(api);
 
     // Lifecycle hooks
     // Auto-recall hook
