@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/agent-mind",
+  "version": "0.0.1",
+  "description": "A plugin designed to enhance the cognitive capabilities of agents by providing advanced reasoning, decision-making, and learning functionalities. Backed by Memvid, it enables agents to process and analyze information more effectively, leading to improved performance in complex tasks and dynamic environments.",
+  "type": "module",
+  "devDependencies": {
+    "@memvid/sdk": "^2.0.155",
+    "@sinclair/typebox": "0.34.48",
+    "ajv": "^8.17.1",
+    "openclaw": "workspace:*",
+    "zod": "^3.23.8"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "agent-mind",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "defaultMemorySubPath": {
+        "type": "string",
+        "default": "memory",
+        "description": "The default sub-path within the agent's workspace"
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable Agent Mind",
+      "description": "Toggle to enable or disable the Agent Mind plugin."
+    },
+    "defaultMemorySubPath": {
+      "label": "Default Memory Sub-Path",
+      "description": "Specify the default sub-path within the agent's workspace for memory storage."
+    }
+  }
+}
